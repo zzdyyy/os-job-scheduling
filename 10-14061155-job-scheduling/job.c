@@ -19,6 +19,15 @@ int fifo;
 struct waitqueue *head[3]={NULL,NULL,NULL};//neal: change it into an array
 struct waitqueue *next=NULL,*current =NULL;
 
+struct waitqueue *findtail(int i)
+{
+	struct waitqueue *p=NULL;
+	p = head[i];
+	while(p!=NULL && p->next != head[i])
+		p = p->next;
+	return p;
+}
+
 /* 调度程序 */
 void scheduler()
 {
@@ -66,14 +75,16 @@ void scheduler()
 		timeslice=0;
 
 	if(timeslice<=0){
+	    //next=NULL;jobswitch();
 		/* 选择高优先级作业 */
 		next=jobselect();
 		/* 作业切换 */
 		jobswitch();
 
-		timeslice=(	next->job->curpri==2? 1000/tick:
-					next->job->curpri==1? 2000/tick:
-					next->job->curpri==0? 5000/tick: 0 );
+		timeslice=(	current==NULL? 0:
+		            current->job->curpri==2? 1000/tick:
+					current->job->curpri==1? 2000/tick:
+					current->job->curpri==0? 5000/tick: 0 );
 	}
 }
 
@@ -84,40 +95,136 @@ int allocjid()
 
 void updateall()
 {
-	struct waitqueue *p;
+	struct waitqueue *p,*tail[3]={NULL,NULL,NULL};
 
 	/* 更新作业运行时间 */
 	if(current)
-		current->job->run_time += 1; /* 加1代表1000ms */
-
-	/* 更新作业等待时间及优先级 */
-	for(p = head; p != NULL; p = p->next){
-		p->job->wait_time += 1000;
-		if(p->job->wait_time >= 5000 && p->job->curpri < 3){
-			p->job->curpri++;
-			p->job->wait_time = 0;
+		current->job->run_time += tick; 
+	
+	for(int i=0;i<2;i++)			
+	{
+		struct waitqueue *pre=NULL;
+		tail[i+1] = findtail(i+1);
+		pre = findtail(i); 	//pre为当前所指的前一个（初始值为tail[i]）
+		/* 更新作业等待时间及优先级 */
+		if(head[i]==NULL)
+			continue;
+		if(head[i]->next!=head[i]) //至少有两个
+		{
+			for(p = head[i]; p != NULL && p->next!=head[i]; p = p->next)
+			{
+				p->job->wait_time += tick;		
+				if(p->job->wait_time >= 10000)
+				{       
+					p->job->curpri++;
+					p->job->wait_time = 0;
+					pre->next = p->next; //断p尾
+					if(head[i+1]==NULL)  //优先级高的队列为空
+					{
+						head[i+1]=p;
+						p->next=head[i+1];
+						tail[i+1]=p;
+						p = pre;	     //重置p
+					}
+					else			//优先级高的队列不空
+					{
+						p->next = head[i+1]; //连p头
+						tail[i+1]->next = p; //连p尾
+						tail[i+1] = p; 	     //更新i+1的尾
+						p = pre;	     //重置p
+					}
+				}
+				pre = p;	//更新pre
+			}
+			/////////////p=队尾
+			{
+				p->job->wait_time += tick;
+				if(p->job->wait_time >= 10000)
+				{       
+					p->job->curpri++;
+					p->job->wait_time = 0;
+					pre->next = p->next; //断p尾
+					if(head[i+1]==NULL)  //优先级高的队列为空
+					{
+						head[i+1]=p;
+						p->next=head[i+1];
+						tail[i+1]=p;
+						p = pre;	     //重置p
+					}
+					else			//优先级高的队列不空
+					{
+						p->next = head[i+1]; //连p头
+						tail[i+1]->next = p; //连p尾
+						tail[i+1] = p; 	     //更新i+1的尾
+					}
+				}
+			}
+		}
+		else//队列中只有一个
+		{
+			p = head[i];
+			
+			p->job->wait_time += tick;
+			if(p->job->wait_time >= 10000)
+			{
+				p->job->curpri++;
+				p->job->wait_time = 0;
+				head[i] = NULL;
+				if(head[i+1]==NULL)  //优先级高的队列为空
+				{
+					head[i+1]=p;
+					p->next=head[i+1];
+					tail[i+1]=p;
+				}
+				else			//优先级高的队列不空
+				{
+					p->next = head[i+1];
+					tail[i+1]->next = p;
+					tail[i+1] = p;
+				}
+			}
 		}
 	}
+	////////////////i=3
+#ifdef YU
+printf("before 3\n");
+fflush(stdout);
+#endif
+	for(int i=2;i<=2;i++)
+	{
+		/* 更新作业等待时间 */
+		if(head[i]==NULL)
+			continue;
+
+		for(p = head[i]; p != NULL && p->next!=head[i]; p = p->next)
+			p->job->wait_time += tick;		
+		
+		/////////////p=队尾
+		p->job->wait_time += tick;
+		
+	}					
 }
 
 struct waitqueue* jobselect()
 {
-	struct waitqueue *p,*prev,*select,*selectprev;
-	int highest = -1;
-
+	struct waitqueue *pre,*select;
 	select = NULL;
-	selectprev = NULL;
-	if(head){
-		/* 遍历等待队列中的作业，找到优先级最高的作业 */
-		for(prev = head, p = head; p != NULL; prev = p,p = p->next)
-			if(p->job->curpri > highest){
-				select = p;
-				selectprev = prev;
-				highest = p->job->curpri;
+	for(int i = 2; i >= 0; i--)
+	{
+		if(head[i]!=NULL)	//队列不为空
+		{
+			select = head[i];  //取出头
+			pre = findtail(i);
+			if(pre != head[i]) //循环队列有两个以上
+			{
+				head[i] = head[i]->next;	//移动更新head
+				pre->next = head[i];		//将pre（即尾）指向新head
 			}
-			selectprev->next = select->next;
-			if (select == selectprev)
-				head = NULL;
+			else		  //循环队列只有一项
+				head[i] = NULL;		//取出后置空
+			select->next=NULL;//neal: set next at NULL
+			break;  //有取出后，则退出循环
+		}
 	}
 	return select;
 }
@@ -142,11 +249,10 @@ void jobswitch()
 	}
 
 	if(next == NULL && current == NULL) /* 没有作业要运行 */
-
 		return;
 	else if (next != NULL && current == NULL){ /* 开始新的作业 */
 
-		printf("begin start new job\n");
+		printf("begin start new job\n");//neal: TODO
 		current = next;
 		next = NULL;
 		current->job->state = RUNNING;
@@ -160,13 +266,18 @@ void jobswitch()
 		current->job->curpri = current->job->defpri;
 		current->job->wait_time = 0;
 		current->job->state = READY;
+		//////////////////////////////////////////////////////////////// 4.15 00:30
+		int j = current->job->defpri;
 
 		/* 放回等待队列 */
-		if(head){
-			for(p = head; p->next != NULL; p = p->next);
+		if(head[j]){
+			p = findtail(j);
 			p->next = current;
+			current->next = head[j];
+
 		}else{
-			head = current;
+			head[j] = current;
+			current->next = head[j];
 		}
 		current = next;
 		next = NULL;
