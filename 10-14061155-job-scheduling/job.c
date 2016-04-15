@@ -48,7 +48,13 @@ void scheduler()
 #endif
 
 	/* 更新等待队列中的作业 */
+#ifdef RT_DEBUG
+	debug_stat("before updateall()");
+#endif
 	updateall();
+#ifdef RT_DEBUG
+	debug_stat("after updateall()");
+#endif
 
 	switch(cmd.type){
 	case ENQ:
@@ -64,6 +70,9 @@ void scheduler()
 	default:
 		break;
 	}
+#ifdef RT_DEBUG
+	debug_stat("after do_enq and do_deq");
+#endif
 
 	if(current==NULL)
 		timeslice=0;
@@ -77,9 +86,18 @@ void scheduler()
 	if(timeslice<=0){
 	    //next=NULL;jobswitch();
 		/* 选择高优先级作业 */
+#ifdef RT_DEBUG
+		debug_stat("before jobselect()");
+#endif
 		next=jobselect();
 		/* 作业切换 */
+#ifdef RT_DEBUG
+		debug_stat("after jobselect(), before jobswitch()");
+#endif
 		jobswitch();
+#ifdef RT_DEBUG
+		debug_stat("after jobswitch()");
+#endif
 
 		timeslice=(	current==NULL? 0:
 		            current->job->curpri==2? 1000/tick:
@@ -312,6 +330,9 @@ case SIGCHLD: /* 子进程结束时传送给父进程的信号 */
 		printf("child stopped, signal number = %d\n",WSTOPSIG(status));
 	}
 	return;
+case SIGUSR1: /* 子进程发送STAT命令时传送给父进程的信号 *///TONY
+        do_stat();//TONY
+        return;//TONY
 	default:
 		return;
 	}
@@ -481,7 +502,7 @@ void do_deq(struct jobcmd deqcmd)
 	}
 }
 
-void do_stat(struct jobcmd statcmd)
+void do_stat()//TONY
 {
 	struct waitqueue *p;
 	char timebuf[BUFLEN];
@@ -497,31 +518,56 @@ void do_stat(struct jobcmd statcmd)
 	*/
 
 	/* 打印信息头部 */
-	printf("JOBID\tPID\tOWNER\tRUNTIME\tWAITTIME\tCREATTIME\t\tSTATE\n");
+        
+        int statFifo;//TONY
+        if((statFifo=open("/tmp/os_job_stat",O_WRONLY))<0)//TONY
+		error_sys("open statFifo failed");
+        
+        char do_statBuff[200]={0};//TONY
+ 	sprintf(do_statBuff,"JOBID\tPID\tOWNER\tRUNTIME\tWAITTIME\tCREATTIME\t\tSTATE\n");//TONY
+        write(statFifo,do_statBuff,strlen(do_statBuff));//TONY
+        
 	if(current){
 		strcpy(timebuf,ctime(&(current->job->create_time)));
 		timebuf[strlen(timebuf)-1]='\0';
-		printf("%d\t%d\t%d\t%d\t%d\t%s\t%s\n",
+		sprintf(do_statBuff,"%d\t%d\t%d\t%d\t%d\t%s\t%s\n",
 			current->job->jid,
 			current->job->pid,
 			current->job->ownerid,
 			current->job->run_time,
 			current->job->wait_time,
-			timebuf,"RUNNING");
+			timebuf,"RUNNING");//TONY
+//                 printf("current\n");
+                write(statFifo,do_statBuff,sizeof(do_statBuff));//TONY
+                
 	}
 
-	for(p=head;p!=NULL;p=p->next){
-		strcpy(timebuf,ctime(&(p->job->create_time)));
-		timebuf[strlen(timebuf)-1]='\0';
-		printf("%d\t%d\t%d\t%d\t%d\t%s\t%s\n",
-			p->job->jid,
-			p->job->pid,
-			p->job->ownerid,
-			p->job->run_time,
-			p->job->wait_time,
-			timebuf,
-			"READY");
-	}
+	//TONY
+	int i=0;
+	for(i=0;i<3;i++){
+            if(head[i]==NULL){
+                continue;
+            }
+            p=head[i];
+            do{
+                    strcpy(timebuf,ctime(&(p->job->create_time)));
+                    timebuf[strlen(timebuf)-1]='\0';
+                    sprintf(do_statBuff,"%d\t%d\t%d\t%d\t%d\t%s\t%s\n",
+                            p->job->jid,
+                            p->job->pid,
+                            p->job->ownerid,
+                            p->job->run_time,
+                            p->job->wait_time,
+                            timebuf,
+                            "READY");
+                    write(statFifo,do_statBuff,strlen(do_statBuff));//输出到管道
+                    p=p->next;
+            }while(p!=head[i]);
+            
+        }
+        //TONY
+	close(statFifo);//TONY
+	
 }
 
 int main()
@@ -529,7 +575,21 @@ int main()
 	struct timeval interval;
 	struct itimerval new,old;
 	struct stat statbuf;
-	struct sigaction newact,oldact1,oldact2;
+	struct sigaction newact,oldact1,oldact2,oldact3;//TONY
+
+    //TONY: make fifo
+    int pidFile=open("/tmp/os_job_pid",O_WRONLY|O_CREAT|O_TRUNC,S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH);//TONY
+        pid_t job_pid = getpid();//TONY
+        write(pidFile,&job_pid,sizeof(job_pid));//TONY
+        close(pidFile);//TONY
+	
+        if(stat("/tmp/os_job_stat",&statbuf)==0){//TONY
+		/* 如果FIFO文件存在,删掉 */
+		if(remove("/tmp/os_job_stat")<0)
+                    error_sys("remove failed");
+	}
+	if(mkfifo("/tmp/os_job_stat",0666)<0)//TONY
+		error_sys("mkfifo failed");
 
 	if(stat("/tmp/server",&statbuf)==0){
 		/* 如果FIFO文件存在,删掉 */
@@ -546,9 +606,15 @@ int main()
 	/* 建立信号处理函数 */
 	newact.sa_sigaction=sig_handler;
 	sigemptyset(&newact.sa_mask);
+	
+	sigaddset(&newact.sa_mask,SIGCHLD);//TONY
+    sigaddset(&newact.sa_mask,SIGVTALRM);//TONY
+    sigaddset(&newact.sa_mask,SIGUSR1);//TONY
+	
 	newact.sa_flags=SA_SIGINFO;
 	sigaction(SIGCHLD,&newact,&oldact1);
 	sigaction(SIGVTALRM,&newact,&oldact2);
+	sigaction(SIGUSR1,&newact,&oldact3);//TONY
 
 	/* 设置时间间隔为tick毫秒 neal: change the time */
 	interval.tv_sec=0;
@@ -561,6 +627,71 @@ int main()
 	while(siginfo==1);
 
 	close(fifo);
-	//close(globalfd); neal: delete unused variable
+    remove("/tmp/os_job_pid");//TONY
+    unlink("/tmp/server");//TONY
+    unlink("/tmp/os_job_stat");//TONY
 	return 0;
+}
+
+void debug_stat(const char *msg)
+{
+	struct waitqueue *p;
+	char timebuf[BUFLEN];
+	/*
+	*打印所有作业的统计信息:
+	*1.作业ID
+	*2.进程ID
+	*3.作业所有者
+	*4.作业运行时间
+	*5.作业等待时间
+	*6.作业创建时间
+	*7.作业状态
+	*/
+
+	/* 打印信息头部 */
+	fprintf(stderr,msg);
+	fprintf(stderr,"\nJOBID\tPID\tOWNER\tRUNTIME\tWAITTIME\tCREATTIME\t\tSTATE\n");
+	fprintf(stderr,"(current)\n");
+	if(current){
+		strcpy(timebuf,ctime(&(current->job->create_time)));
+		timebuf[strlen(timebuf)-1]='\0';
+		fprintf(stderr,"%d\t%d\t%d\t%d\t%d\t%s\t%s\n",
+			current->job->jid,
+			current->job->pid,
+			current->job->ownerid,
+			current->job->run_time,
+			current->job->wait_time,
+			timebuf,"RUNNING");
+	}
+	fflush(stderr);
+	for(int i=2;i>=0;--i){
+		fprintf(stderr,"(queue %d)\n",i);
+		for(p=head[i];p!=NULL && p->next!=head[i];p=p->next){
+			strcpy(timebuf,ctime(&(p->job->create_time)));
+			timebuf[strlen(timebuf)-1]='\0';
+			fprintf(stderr,"%d\t%d\t%d\t%d\t%d\t%s\t%s\n",
+				p->job->jid,
+				p->job->pid,
+				p->job->ownerid,
+				p->job->run_time,
+				p->job->wait_time,
+				timebuf,
+				"READY");
+		}
+		if(p){
+			strcpy(timebuf,ctime(&(p->job->create_time)));
+			timebuf[strlen(timebuf)-1]='\0';
+			fprintf(stderr,"%d\t%d\t%d\t%d\t%d\t%s\t%s\n",
+				p->job->jid,
+				p->job->pid,
+				p->job->ownerid,
+				p->job->run_time,
+				p->job->wait_time,
+				timebuf,
+				"READY");
+		}
+		fflush(stderr);
+	}
+	fprintf(stderr,"\n\n");
+	fflush(stderr);
 }

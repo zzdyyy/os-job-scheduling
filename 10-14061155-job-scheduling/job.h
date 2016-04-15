@@ -57,12 +57,13 @@ void sig_handler(int sig,siginfo_t *info,void *notused);
 int allocjid();
 void add_queue(struct jobinfo *job);
 void del_queue(struct jobinfo *job);
-struct jobinfo *do_enq(struct jobcmd enqcmd);
+struct jobinfo *do_enq(struct jobcmd enqcmd);//neal: change prototype
 void do_deq(struct jobcmd deqcmd);
-void do_stat(struct jobcmd statcmd);
+void do_stat();//TONY
 void updateall();
 struct waitqueue* jobselect();
 void jobswitch();
+void debug_stat(const char*);//neal: realtime debug
 
 void error_doit(int errnoflag,const char *fmt,va_list ap);
 void error_sys(const char *fmt,...);
