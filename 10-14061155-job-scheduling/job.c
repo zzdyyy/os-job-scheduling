@@ -10,6 +10,7 @@
 #include <time.h>
 #include "job.h"
 #define tick 500 //neal: add macro
+#define RT_DEBUG
 
 int jobid=0;
 int siginfo=1;
@@ -82,6 +83,10 @@ void scheduler()
 	//if the newjob is prior, reset the timeslice
 	if(newjob!=NULL && current!=NULL && newjob->curpri > current->job->curpri)
 		timeslice=0;
+
+	//if the job is done, reset the timeslice
+	if(current!=NULL && current->job->state == DONE)
+	    timeslice=0;
 
 	if(timeslice<=0){
 	    //next=NULL;jobswitch();
@@ -247,7 +252,7 @@ void jobswitch()
 		return;
 	else if (next != NULL && current == NULL){ /* 开始新的作业 */
 
-		printf("begin start new job\n");//neal: TODO
+		printf("switch to Pid: %d\n",next->job->pid);
 		current = next;
 		next = NULL;
 		current->job->state = RUNNING;
