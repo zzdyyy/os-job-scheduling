@@ -9,13 +9,14 @@
 #include <fcntl.h>
 #include <time.h>
 #include "job.h"
+#define tick 500 //neal: add macro
 
 int jobid=0;
 int siginfo=1;
 int fifo;
-int globalfd;
+//int globalfd; neal: delete unused variable
 
-struct waitqueue *head=NULL;
+struct waitqueue *head[3]={NULL,NULL,NULL};//neal: change it into an array
 struct waitqueue *next=NULL,*current =NULL;
 
 /* 调度程序 */
@@ -24,6 +25,7 @@ void scheduler()
 	struct jobinfo *newjob=NULL;
 	struct jobcmd cmd;
 	int  count = 0;
+	static int timeslice=0;
 	bzero(&cmd,DATALEN);
 	if((count=read(fifo,&cmd,DATALEN))<0)
 		error_sys("read fifo failed");
@@ -41,22 +43,38 @@ void scheduler()
 
 	switch(cmd.type){
 	case ENQ:
-		do_enq(newjob,cmd);
+		newjob=do_enq(cmd);
 		break;
 	case DEQ:
 		do_deq(cmd);
 		break;
+/*neal: delete this case
 	case STAT:
 		do_stat(cmd);
-		break;
+		break;*/
 	default:
 		break;
 	}
 
-	/* 选择高优先级作业 */
-	next=jobselect();
-	/* 作业切换 */
-	jobswitch();
+	if(current==NULL)
+		timeslice=0;
+	else
+		--timeslice;
+
+	//if the newjob is prior, reset the timeslice
+	if(newjob!=NULL && current!=NULL && newjob->curpri > current->job->curpri)
+		timeslice=0;
+
+	if(timeslice<=0){
+		/* 选择高优先级作业 */
+		next=jobselect();
+		/* 作业切换 */
+		jobswitch();
+
+		timeslice=(	next->job->curpri==2? 1000/tick:
+					next->job->curpri==1? 2000/tick:
+					next->job->curpri==0? 5000/tick: 0 );
+	}
 }
 
 int allocjid()
@@ -188,9 +206,11 @@ case SIGCHLD: /* 子进程结束时传送给父进程的信号 */
 	}
 }
 
-void do_enq(struct jobinfo *newjob,struct jobcmd enqcmd)
+struct jobinfo *do_enq(struct jobcmd enqcmd)//neal: change the prototype
 {
-	struct waitqueue *newnode,*p;
+	struct jobinfo *newjob;//neal:add new declaration
+	struct waitqueue *newnode;//neal:delete p
+	struct waitqueue *thehead, *thetail;//neal: new declaration
 	int i=0,pid;
 	char *offset,*argvec,*q;
 	char **arglist;
@@ -238,12 +258,16 @@ void do_enq(struct jobinfo *newjob,struct jobcmd enqcmd)
 	newnode->next =NULL;
 	newnode->job=newjob;
 
-	if(head)
-	{
-		for(p=head;p->next != NULL; p=p->next);
-		p->next =newnode;
-	}else
-		head=newnode;
+	//neal: renew the adding precedure
+	thehead=head[enqcmd.defpri];
+	thetail=findtail(enqcmd.defpri);
+	if(thehead != NULL){
+		thetail->next=newnode;
+		newnode->next=thehead;
+	}else{
+		newnode->next=newnode;
+		head[enqcmd.defpri]=newnode;
+	}
 
 	/*为作业创建进程*/
 	if((pid=fork())<0)
@@ -261,13 +285,21 @@ void do_enq(struct jobinfo *newjob,struct jobcmd enqcmd)
 #endif
 
 		/*复制文件描述符到标准输出*/
-		dup2(globalfd,1);
+		//dup2(globalfd,1); neal:delete unused variable
+
 		/* 执行命令 */
 		if(execv(arglist[0],arglist)<0)
 			printf("exec failed\n");
 		exit(1);
 	}else{
+		int ret;
+		ret=waitpid(pid,NULL,WUNTRACED);
+#ifdef DEBUG
+		if(ret<0)
+			perror("waitpid:");
+#endif
 		newjob->pid=pid;
+		return newjob;
 	}
 }
 
@@ -297,17 +329,34 @@ void do_deq(struct jobcmd deqcmd)
 	else{ /* 或者在等待队列中查找deqid */
 		select=NULL;
 		selectprev=NULL;
-		if(head){
-			for(prev=head,p=head;p!=NULL;prev=p,p=p->next)
-				if(p->job->jid==deqid){
+		//neal: rearrange the search
+		for(i=0;i<3 && select==NULL;++i)
+			if(head[i]){
+				for(prev=head[i],p=head[i];p!=NULL && p->next!=head[i];prev=p,p=p->next)
+					if(p->job->jid==deqid){
+						select=p;
+						selectprev=prev;
+						break;
+					}
+				if(p->job->jid==deqid){//for the un-reached tail
 					select=p;
 					selectprev=prev;
 					break;
 				}
-				selectprev->next=select->next;
-				if(select==selectprev)
-					head=NULL;
-		}
+				if(select!=NULL && select!=head[i]){
+					selectprev->next=select->next;
+					select->next=NULL;
+				}else if(select!=NULL && select==head[i]){
+					if(select==select->next)//if there is only one node
+						head[i]=NULL;
+					else{//if there is more than one nodes
+						struct waitqueue *tail=findtail(i);
+						head[i]=head[i]->next;
+						tail->next=head[i];
+					}
+					select->next=NULL;
+				}
+			}
 		if(select){
 			for(i=0;(select->job->cmdarg)[i]!=NULL;i++){
 				free((select->job->cmdarg)[i]);
@@ -390,9 +439,9 @@ int main()
 	sigaction(SIGCHLD,&newact,&oldact1);
 	sigaction(SIGVTALRM,&newact,&oldact2);
 
-	/* 设置时间间隔为1000毫秒 */
-	interval.tv_sec=1;
-	interval.tv_usec=0;
+	/* 设置时间间隔为tick毫秒 neal: change the time */
+	interval.tv_sec=0;
+	interval.tv_usec=tick*1000;
 
 	new.it_interval=interval;
 	new.it_value=interval;
@@ -401,6 +450,6 @@ int main()
 	while(siginfo==1);
 
 	close(fifo);
-	close(globalfd);
+	//close(globalfd); neal: delete unused variable
 	return 0;
 }

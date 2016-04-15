@@ -20,12 +20,18 @@ int main(int argc,char *argv[])
 {
 	struct jobcmd deqcmd;
 	int fd;
+	char *p;
 	
 	if(argc!=2)
 	{
 		usage();
 		return 1;
 	}
+
+	//neal: detect numeric
+	for(p=argv[1]; (*p)!='\0'; ++p)
+		if((*p)<'0' || (*p)>'9')
+			error_sys("jid must be a whole number.");
 
 	deqcmd.type=DEQ;
 	deqcmd.defpri=0;
