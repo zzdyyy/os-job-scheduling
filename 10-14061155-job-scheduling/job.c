@@ -112,28 +112,46 @@ int allocjid()
 }
 
 void updateall()
-{
+{	//printf("begin updateall.\n");fflush(stdout);
 	struct waitqueue *p,*tail[3]={NULL,NULL,NULL};
-
+	int i;
 	/* 更新作业运行时间 */
 	if(current)
 		current->job->run_time += tick; 
-	
-	for(int i=0;i<2;i++)			
+	//printf("time update begin.\n");fflush(stdout);
+	for(i=0;i<=2;i++)		//所有队列更新等待时间
+	{
+		p=head[i];
+		if(head[i]==NULL)
+			continue;
+		for(;p!=NULL && p->next!=head[i];p=p->next) //不包括队尾
+			p->job->wait_time += tick;
+		p->job->wait_time += tick;//队尾更新
+	}
+	//printf("time update finish.\n");fflush(stdout);
+	for(i=0;i<2;i++)			
 	{
 		struct waitqueue *pre=NULL;
+		int flag = 1;//默认flag为真
+		tail[i] = findtail(i);
 		tail[i+1] = findtail(i+1);
 		pre = findtail(i); 	//pre为当前所指的前一个（初始值为tail[i]）
 		/* 更新作业等待时间及优先级 */
-		if(head[i]==NULL)
-			continue;
-		if(head[i]->next!=head[i]) //至少有两个
+		p = head[i];
+		while(flag==1)
 		{
-			for(p = head[i]; p != NULL && p->next!=head[i]; p = p->next)
+			if(head[i]==NULL)
+				break;
+			if(head[i]->next!=head[i]) //至少有两个
 			{
-				p->job->wait_time += tick;		
+				if(p->next==head[i])
+					flag=0;
 				if(p->job->wait_time >= 10000)
 				{       
+					if(p==head[i]){//若头部需改变优先级
+						head[i]=head[i]->next;
+						tail[i]->next=head[i];
+					}
 					p->job->curpri++;
 					p->job->wait_time = 0;
 					pre->next = p->next; //断p尾
@@ -142,85 +160,44 @@ void updateall()
 						head[i+1]=p;
 						p->next=head[i+1];
 						tail[i+1]=p;
-						p = pre;	     //重置p
 					}
 					else			//优先级高的队列不空
 					{
 						p->next = head[i+1]; //连p头
 						tail[i+1]->next = p; //连p尾
 						tail[i+1] = p; 	     //更新i+1的尾
-						p = pre;	     //重置p
 					}
+					p = pre;	     //重置p
 				}
 				pre = p;	//更新pre
+				p = p->next;
 			}
-			/////////////p=队尾
+			else//队列中只有一个
 			{
-				p->job->wait_time += tick;
+				flag=0;
 				if(p->job->wait_time >= 10000)
-				{       
+				{
 					p->job->curpri++;
 					p->job->wait_time = 0;
-					pre->next = p->next; //断p尾
+					head[i]->next=NULL;
+					head[i] = NULL;
 					if(head[i+1]==NULL)  //优先级高的队列为空
 					{
 						head[i+1]=p;
 						p->next=head[i+1];
 						tail[i+1]=p;
-						p = pre;	     //重置p
 					}
 					else			//优先级高的队列不空
 					{
-						p->next = head[i+1]; //连p头
-						tail[i+1]->next = p; //连p尾
-						tail[i+1] = p; 	     //更新i+1的尾
+						p->next = head[i+1];
+						tail[i+1]->next = p;
+						tail[i+1] = p;
 					}
-				}
-			}
-		}
-		else//队列中只有一个
-		{
-			p = head[i];
-			
-			p->job->wait_time += tick;
-			if(p->job->wait_time >= 10000)
-			{
-				p->job->curpri++;
-				p->job->wait_time = 0;
-				head[i] = NULL;
-				if(head[i+1]==NULL)  //优先级高的队列为空
-				{
-					head[i+1]=p;
-					p->next=head[i+1];
-					tail[i+1]=p;
-				}
-				else			//优先级高的队列不空
-				{
-					p->next = head[i+1];
-					tail[i+1]->next = p;
-					tail[i+1] = p;
 				}
 			}
 		}
 	}
-	////////////////i=3
-#ifdef YU
-printf("before 3\n");
-fflush(stdout);
-#endif
-	for(int i=2;i<=2;i++)
-	{
-		/* 更新作业等待时间 */
-		if(head[i]==NULL)
-			continue;
-
-		for(p = head[i]; p != NULL && p->next!=head[i]; p = p->next)
-			p->job->wait_time += tick;		
-		
-		/////////////p=队尾
-		p->job->wait_time += tick;
-		
-	}					
+						
 }
 
 struct waitqueue* jobselect()
