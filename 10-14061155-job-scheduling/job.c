@@ -450,7 +450,6 @@ void do_deq(struct jobcmd deqcmd)
 				if(p->job->jid==deqid){//for the un-reached tail
 					select=p;
 					selectprev=prev;
-					break;
 				}
 				if(select!=NULL && select!=head[i]){
 					selectprev->next=select->next;
